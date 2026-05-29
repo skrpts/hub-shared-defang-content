@@ -33,9 +33,19 @@ jobs:
 
       - name: Extract version and slug
         id: meta
+        # `slug` is the GitHub repo name and is used wherever the release
+        # asset is referenced (zip naming, release URL).
+        # `db_slug` strips the `hub-shared-` prefix (shared objects only;
+        # consumer skrpts have no prefix and are unchanged) and is used for
+        # Hub API lookups, which key on the catalogue slug — distinct from
+        # the GitHub repo name per the three-id model in publish-skrpt.mjs.
+        # Without this split, the API lookups for shared objects 404,
+        # silently skipping security-report and version registration.
         run: |
+          REPO_NAME=$(basename "$GITHUB_REPOSITORY")
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "slug=$(basename "$GITHUB_REPOSITORY")" >> "$GITHUB_OUTPUT"
+          echo "slug=${REPO_NAME}" >> "$GITHUB_OUTPUT"
+          echo "db_slug=${REPO_NAME#hub-shared-}" >> "$GITHUB_OUTPUT"
 
       # Always use the latest CLI release — no version pin.
       # Engine validation rules change frequently; a stale binary
@@ -235,10 +245,10 @@ jobs:
           SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
           HUB_API_URL: https://hub.skrptiq.ai
         run: |
-          SLUG="${{ steps.meta.outputs.slug }}"
+          SLUG="${{ steps.meta.outputs.db_slug }}"
           VERSION="${{ steps.meta.outputs.version }}"
 
-          # Look up skrpt UUID from Hub
+          # Look up skrpt UUID from Hub (db_slug — no hub-shared- prefix)
           SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
           SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
 
@@ -269,10 +279,10 @@ jobs:
           SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
           HUB_API_URL: https://hub.skrptiq.ai
         run: |
-          SLUG="${{ steps.meta.outputs.slug }}"
+          SLUG="${{ steps.meta.outputs.db_slug }}"
           VERSION="${{ steps.meta.outputs.version }}"
 
-          # Look up skrpt UUID from Hub
+          # Look up skrpt UUID from Hub (db_slug — no hub-shared- prefix)
           SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
           SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
 
@@ -281,10 +291,15 @@ jobs:
             exit 0
           fi
 
-          # Extract content hash from the signed manifest's integrity block
+          # Extract content hash from the signed manifest's integrity block.
+          # The CLI signer may emit `checksum: sha256:abc…` (unquoted) or
+          # `checksum: "sha256:abc…"` (quoted) depending on version; accept
+          # both. The previous quoted-only regex silently produced empty
+          # content_hash for unquoted releases — latest consumer skrpts
+          # were affected too, not just shared objects.
           CONTENT_HASH=$(node -e "
             const m = require('fs').readFileSync('skrptiq.yaml','utf-8');
-            const match = m.match(/checksum:\\s*\"sha256:([a-f0-9]+)\"/);
+            const match = m.match(/checksum:\\s*\"?sha256:([a-f0-9]+)\"?/);
             console.log(match ? match[1] : '');
           ")
 
