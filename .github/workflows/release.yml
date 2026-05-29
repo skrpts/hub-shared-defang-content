@@ -248,13 +248,22 @@ jobs:
           SLUG="${{ steps.meta.outputs.db_slug }}"
           VERSION="${{ steps.meta.outputs.version }}"
 
-          # Look up skrpt UUID from Hub (db_slug — no hub-shared- prefix)
+          # ── FAIL LOUD on lookup failure (build-for-reliability) ──
+          # Workflow success implies the catalogue row was written. Silent
+          # skip violates that contract — every catalogue row must trace
+          # back to a green workflow, every green workflow must produce a
+          # catalogue row. The Step 6 incident (GH#612) was caused by a
+          # slug-translation bug whose `exit 0` skip turned all 41 release
+          # runs green while writing nothing. Any future cause of an empty
+          # SKRPT_ID — network blip, Hub down, schema change, secret
+          # rotation, NEW slug-format drift — must fail the workflow, not
+          # warn and continue.
           SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
           SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
 
           if [ -z "$SKRPT_ID" ]; then
-            echo "::warning::Could not look up skrpt ID from Hub — skipping report submission"
-            exit 0
+            echo "::error::Could not look up skrpt ID from Hub for slug='${SLUG}' — refusing to skip security report submission"
+            exit 1
           fi
 
           # Build and POST report
@@ -269,9 +278,16 @@ jobs:
             -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
             -d "$PAYLOAD" 2>/dev/null || echo "000")
 
+          # 409 is the idempotent re-publish case (same version + report
+          # already on file) — keep this soft. Do NOT tighten 409 into an
+          # error; it would break the legitimate re-publish path. Anything
+          # else that isn't 201 fails the workflow.
           if [ "$HTTP_CODE" = "201" ]; then echo "Security report submitted (HTTP 201)"
-          elif [ "$HTTP_CODE" = "409" ]; then echo "Report already exists (HTTP 409)"
-          else echo "::warning::Failed to submit report (HTTP ${HTTP_CODE})"; fi
+          elif [ "$HTTP_CODE" = "409" ]; then echo "Report already exists (HTTP 409 — idempotent re-publish, allowed)"
+          else
+            echo "::error::Security report POST failed for ${SLUG}@${VERSION} (HTTP ${HTTP_CODE}) — refusing to mark workflow green" >&2
+            exit 1
+          fi
 
       - name: Register version with Hub API
         if: always() && steps.scan.outcome == 'success'
@@ -282,13 +298,17 @@ jobs:
           SLUG="${{ steps.meta.outputs.db_slug }}"
           VERSION="${{ steps.meta.outputs.version }}"
 
-          # Look up skrpt UUID from Hub (db_slug — no hub-shared- prefix)
+          # FAIL LOUD on lookup failure — same rationale as the security
+          # step above. Workflow success implies catalogue row written.
+          # An empty SKRPT_ID for any reason (network blip, slug drift,
+          # secret rotation) must fail this workflow rather than warn and
+          # continue. See the comment block above the security-report step.
           SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
           SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
 
           if [ -z "$SKRPT_ID" ]; then
-            echo "::warning::Could not look up skrpt ID — skipping version registration"
-            exit 0
+            echo "::error::Could not look up skrpt ID from Hub for slug='${SLUG}' — refusing to skip version registration"
+            exit 1
           fi
 
           # Extract content hash from the signed manifest's integrity block.
@@ -319,6 +339,13 @@ jobs:
             -H "x-scanner-api-key: ${SCANNER_API_KEY}" \
             -d "$PAYLOAD" 2>/dev/null || echo "000")
 
+          # 409 is the idempotent re-publish case (same skrpt + version
+          # already registered) — keep this soft. Do NOT tighten 409 into
+          # an error; it would break the legitimate re-publish path.
+          # Anything else that isn't 201 fails the workflow.
           if [ "$HTTP_CODE" = "201" ]; then echo "Version registered (HTTP 201)"
-          elif [ "$HTTP_CODE" = "409" ]; then echo "Version already exists (HTTP 409)"
-          else echo "::warning::Failed to register version (HTTP ${HTTP_CODE})"; fi
+          elif [ "$HTTP_CODE" = "409" ]; then echo "Version already exists (HTTP 409 — idempotent re-publish, allowed)"
+          else
+            echo "::error::Version registration POST failed for ${SLUG}@${VERSION} (HTTP ${HTTP_CODE}) — refusing to mark workflow green" >&2
+            exit 1
+          fi
