@@ -250,19 +250,22 @@ jobs:
 
           # ── FAIL LOUD on lookup failure (build-for-reliability) ──
           # Workflow success implies the catalogue row was written. Silent
-          # skip violates that contract — every catalogue row must trace
-          # back to a green workflow, every green workflow must produce a
-          # catalogue row. The Step 6 incident (GH#612) was caused by a
-          # slug-translation bug whose `exit 0` skip turned all 41 release
-          # runs green while writing nothing. Any future cause of an empty
-          # SKRPT_ID — network blip, Hub down, schema change, secret
-          # rotation, NEW slug-format drift — must fail the workflow, not
-          # warn and continue.
-          SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
-          SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
+          # skip violates that contract. K-037 + Action 6 (`0bcc5ae0`)
+          # make the signed bundle's top-level `manifest.id` equal to the
+          # D1 catalogue row's `id` by construction — they are the same
+          # UUID. So we read SKRPT_ID directly from the signed yaml
+          # rather than calling /api/skrpts/<slug>, which:
+          #   - 404s for shared-objects (Row 4a re-applied the
+          #     entry_type='skrpt' filter), and
+          #   - is unavailable until after this workflow's POST to
+          #     /api/skrpts/by-id/.../versions for net-new versions.
+          # The local extraction is K-037-canonical and avoids both.
+          # If the manifest is malformed (no top-level `id:`), the
+          # publish itself is broken; fail the workflow loudly.
+          SKRPT_ID=$(grep -E '^id: ' skrptiq.yaml | head -1 | sed -E 's/^id: *"?([^"]+)"?$/\1/')
 
           if [ -z "$SKRPT_ID" ]; then
-            echo "::error::Could not look up skrpt ID from Hub for slug='${SLUG}' — refusing to skip security report submission"
+            echo "::error::Could not extract manifest.id from signed skrptiq.yaml for slug='${SLUG}' — refusing to skip security report submission"
             exit 1
           fi
 
@@ -298,29 +301,38 @@ jobs:
           SLUG="${{ steps.meta.outputs.db_slug }}"
           VERSION="${{ steps.meta.outputs.version }}"
 
-          # FAIL LOUD on lookup failure — same rationale as the security
-          # step above. Workflow success implies catalogue row written.
-          # An empty SKRPT_ID for any reason (network blip, slug drift,
-          # secret rotation) must fail this workflow rather than warn and
-          # continue. See the comment block above the security-report step.
-          SKRPT_DATA=$(curl -sf "${HUB_API_URL}/api/skrpts/${SLUG}" 2>/dev/null || echo '{}')
-          SKRPT_ID=$(echo "$SKRPT_DATA" | node -e "try{const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8'));console.log(d.skrpt?.id||'')}catch{console.log('')}")
+          # FAIL LOUD on lookup failure — same rationale + same K-037
+          # local-extraction approach as the security-report step above.
+          # See that comment block for the full reasoning.
+          SKRPT_ID=$(grep -E '^id: ' skrptiq.yaml | head -1 | sed -E 's/^id: *"?([^"]+)"?$/\1/')
 
           if [ -z "$SKRPT_ID" ]; then
-            echo "::error::Could not look up skrpt ID from Hub for slug='${SLUG}' — refusing to skip version registration"
+            echo "::error::Could not extract manifest.id from signed skrptiq.yaml for slug='${SLUG}' — refusing to skip version registration"
             exit 1
           fi
 
           # Extract content hash from the signed manifest's integrity block.
+          #
+          # ANCHORED on the `integrity:` block (NOT the first `checksum:` in
+          # the manifest). Pre-GH#625 dep-referenced consumers had only one
+          # `checksum:` occurrence (inside integrity), so the unanchored
+          # regex worked by accident. After Step 3 introduces a
+          # `dependencies:` block, the manifest has 1+N `checksum:` entries
+          # (one per dep + one in integrity), and the unanchored
+          # `match.match(/checksum:.../)` returns dep[0]'s checksum
+          # alphabetically — NOT the bundle's own integrity checksum.
+          # Surfaced live on roadmap-generation-flow v1.1.28: contentHash
+          # in D1 was set to analyse-stakeholders' dep checksum, not the
+          # bundle's. Fix-forward via v1.1.29 with this regex change in
+          # the same wave.
+          #
           # The CLI signer may emit `checksum: sha256:abc…` (unquoted) or
-          # `checksum: "sha256:abc…"` (quoted) depending on version; accept
-          # both. The previous quoted-only regex silently produced empty
-          # content_hash for unquoted releases — latest consumer skrpts
-          # were affected too, not just shared objects.
+          # `checksum: "sha256:abc…"` (quoted) depending on version; both
+          # accepted under the integrity-anchor.
           CONTENT_HASH=$(node -e "
             const m = require('fs').readFileSync('skrptiq.yaml','utf-8');
-            const match = m.match(/checksum:\\s*\"?sha256:([a-f0-9]+)\"?/);
-            console.log(match ? match[1] : '');
+            const intMatch = m.match(/integrity:\\s*\\n(?:\\s+\\w+:[^\\n]*\\n)*\\s+checksum:\\s*\"?sha256:([a-f0-9]+)\"?/);
+            console.log(intMatch ? intMatch[1] : '');
           ")
 
           PAYLOAD=$(node -e "
