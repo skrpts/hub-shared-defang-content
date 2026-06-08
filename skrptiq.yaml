@@ -3,7 +3,7 @@ id: "553c54e1-e570-4a07-b95d-51933c619dbc"
 name: "defang-content"
 display_name: "Defang Content"
 description: "Neutralises potentially dangerous content in code snippets, URLs, and commands before display or processing"
-version: "1.0.1"
+version: "1.0.2"
 engine: ">=0.1.0"
 author:
   name: "skrptiq"
@@ -14,6 +14,8 @@ category: "shared"
 tags:
   - "shared"
   - "skill"
+dependencies: []
+
 contents:
   skills: 1
   prompts: 0
