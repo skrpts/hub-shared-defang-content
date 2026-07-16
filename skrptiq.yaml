@@ -3,7 +3,7 @@ id: "553c54e1-e570-4a07-b95d-51933c619dbc"
 name: "defang-content"
 display_name: "Defang Content"
 description: "Neutralises potentially dangerous content in code snippets, URLs, and commands before display or processing"
-version: "1.0.2"
+version: "1.0.3"
 engine: ">=0.1.0"
 author:
   name: "skrptiq"
@@ -25,3 +25,17 @@ contents:
   documents: 0
   assets: 0
   total: 1
+
+security:
+  status: "pass"
+  scanned_at: "2026-07-16T14:40:57.417Z"
+  scanner_version: "3.3.0"
+  syntactic: "pass"
+  structural: "pass"
+  detected:
+    services: []
+    permissions: []
+    data_handling: []
+  undeclared: []
+  warnings: []
+  report_url: "https://hub.skrptiq.ai/skrpts/defang-content/security"
