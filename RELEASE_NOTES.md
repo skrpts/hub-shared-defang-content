@@ -1,5 +1,10 @@
 # Release Notes
 
+## v1.0.4
+GH#1011 — add the prompt this skill never had, for the same reason as the rest of the batch: its consumers declared `local.transform`, which needs no prompt, so the steps reached the LLM default with nothing to send.
+
+Not mapped to the `defang` builtin, and the reason is countable: the builtin covers THREE of this skill's five documented behaviours — the URL, IP and email substitutions, which are pure string work. It does not wrap code-execution patterns in warning fences, and does not flag sensitive file paths. Substituting it would have silently dropped two advertised behaviours.
+
 ## v1.0.3
 GH#845 — republish with American English (en-US) content, completing the source-only GH#805 flip that never reached the Hub. Copy only — no functional or behaviour change.
 
