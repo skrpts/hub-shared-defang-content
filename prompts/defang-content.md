@@ -8,7 +8,7 @@ context_params:
   source_content:
     label: "Source content"
     description: "Text that may contain dangerous URLs, addresses, code or commands."
-    default_from_previous: true
+    required: true
 metadata:
   output_format: markdown
   prompt_type: task
